@@ -1,0 +1,77 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="AutoCloseableResource" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="METHOD_MATCHER_CONFIG" value="java.util.Formatter,format,java.io.Writer,append,com.google.common.base.Preconditions,checkNotNull,org.hibernate.Session,close,java.io.PrintWriter,printf,java.io.PrintStream,printf,java.lang.foreign.Arena,ofAuto,java.lang.foreign.Arena,global,io.netty.bootstrap.AbstractBootstrap,group" />
+    </inspection_tool>
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="absl-py" />
+          <option value="atomicwrites" />
+          <option value="attrs" />
+          <option value="certifi" />
+          <option value="chardet" />
+          <option value="cycler" />
+          <option value="docopt" />
+          <option value="enum34" />
+          <option value="future" />
+          <option value="idna" />
+          <option value="imageio" />
+          <option value="jsonpickle" />
+          <option value="kiwisolver" />
+          <option value="matplotlib" />
+          <option value="mock" />
+          <option value="more-itertools" />
+          <option value="mpyq" />
+          <option value="munch" />
+          <option value="numpy" />
+          <option value="pathlib2" />
+          <option value="pbr" />
+          <option value="Pillow" />
+          <option value="pluggy" />
+          <option value="portpicker" />
+          <option value="probscale" />
+          <option value="protobuf" />
+          <option value="py" />
+          <option value="pygame" />
+          <option value="pyparsing" />
+          <option value="pysc2" />
+          <option value="pytest" />
+          <option value="python-dateutil" />
+          <option value="PyYAML" />
+          <option value="requests" />
+          <option value="s2clientprotocol" />
+          <option value="sacred" />
+          <option value="scipy" />
+          <option value="six" />
+          <option value="sk-video" />
+          <option value="snakeviz" />
+          <option value="tensorboard-logger" />
+          <option value="torch" />
+          <option value="torchvision" />
+          <option value="tornado" />
+          <option value="urllib3" />
+          <option value="websocket-client" />
+          <option value="whichcraft" />
+          <option value="wrapt" />
+          <option value="smac" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N802" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyStubPackagesAdvertiser" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="scipy" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
