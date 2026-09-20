@@ -1,17 +1,13 @@
 import protoc.hello.HelloWorldRequest;
 import protoc.hello.HelloWorldResponse;
 import rpc.RpcClient;
-import rpc.transport.RpcTransport;
-import rpc.transport.Transport;
+import rpc.ServiceFinder;
 import service.HelloService;
 
 import java.util.*;
 import java.util.concurrent.*;
 
 public class Application {
-
-    static final String HOST = "127.0.0.1";
-    static final short  PORT = (short) 8891;
 
     public static void main(String[] args) throws Exception {
         // 用法: java LoadTest [threads] [durationSec] [warmupSec]
@@ -20,7 +16,6 @@ public class Application {
         int warmupSec   = args.length > 2 ? Integer.parseInt(args[2]) : 5;
 
         System.out.println("=== RPC Load Test ===");
-        System.out.printf("target   : %s:%d%n", HOST, PORT);
         System.out.printf("threads  : %d%n", threads);
         System.out.printf("warmup   : %d s%n", warmupSec);
         System.out.printf("duration : %d s%n%n", durationSec);
@@ -48,7 +43,6 @@ public class Application {
             futures.add(pool.submit(new Worker(i, durationSec, ready, start)));
         }
 
-        // 等所有线程把 RpcClient 连接建立好，避免建连耗时污染压测
         if (!ready.await(60, TimeUnit.SECONDS)) {
             throw new IllegalStateException("client 初始化超时");
         }
@@ -99,10 +93,7 @@ public class Application {
 
         @Override
         public WorkerResult call() throws Exception {
-            // 每个线程独立一个 client，避免共享连接带来的锁竞争
-            Transport transport = new RpcTransport();
-            transport.connect(HOST, PORT);
-            HelloService service = RpcClient.newService(HelloService.class, transport);
+            HelloService service = new RpcClient(new ServiceFinder()).newService(HelloService.class);
 
             long[] lat = new long[1 << 16];  // 64K 起步，按需扩容
             int n = 0;
@@ -135,7 +126,6 @@ public class Application {
                 }
             }
 
-            transport.close();
             return new WorkerResult(success, fail, lat, n);
         }
     }
