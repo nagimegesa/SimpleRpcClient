@@ -2,11 +2,11 @@ package com.rpcclient.rpc;
 
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.rpcclient.rpc.exception.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import com.rpcclient.rpc.annotation.RpcMethod;
 import com.rpcclient.rpc.annotation.RpcService;
-import com.rpcclient.rpc.exception.RpcErrorCode;
-import com.rpcclient.rpc.exception.RpcException;
 import com.rpcclient.rpc.transport.RpcTransport;
 import com.rpcclient.rpc.transport.Transport;
 
@@ -23,18 +23,33 @@ public class RpcClient {
     @Resource
     public ServiceFinder finder;
 
+    @Value("${rpc.service.timeout:3000}")
+    private int transportWriteTimeout;
+
+    @Value("${rpc.service.retry:3}")
+    private int retry;
+
     private static final ConcurrentHashMap<ServiceAddress, Transport> serviceTransport = new ConcurrentHashMap<>();
 
     private Transport getTransport(String service) {
-        ServiceAddress serviceAddress = finder.selectService(service);
-        if(serviceTransport.containsKey(serviceAddress)) {
-            return serviceTransport.get(serviceAddress);
+        for(int i = 0; i < retry; ++i) {
+            ServiceAddress serviceAddress = finder.selectService(service);
+            if(serviceTransport.containsKey(serviceAddress)) {
+                return serviceTransport.get(serviceAddress);
+            }
+            Transport transport = new RpcTransport();
+            transport.setTimeout(transportWriteTimeout);
+            transport.addCloseListener(t -> serviceTransport.remove(serviceAddress, transport));
+            try {
+                transport.connect(serviceAddress.ip, (short) serviceAddress.port);
+            } catch (RpcConnectionTimeoutException ignored) {
+                continue;
+            }
+            serviceTransport.put(serviceAddress, transport);
+            return transport;
         }
 
-        Transport transport = new RpcTransport();
-        transport.connect(serviceAddress.ip, (short) serviceAddress.port);
-        serviceTransport.put(serviceAddress, transport);
-        return transport;
+        throw new RpcConnectionTimeoutException("The RPC connection still timed out after %d attempts.".formatted(retry));
     }
 
     @SuppressWarnings("unchecked")
@@ -71,7 +86,7 @@ public class RpcClient {
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             RpcMethod rpc = method.getAnnotation(RpcMethod.class);
             if(rpc == null) {
-                return method.invoke(proxy, args);
+                throw new RpcException("Rpc method must has RpcMethod Annotation");
             }
 
             if (args != null && args.length != 1) {
@@ -82,8 +97,21 @@ public class RpcClient {
             if(args != null) {
                 message = (GeneratedMessageV3) args[0];
             }
+            Transport.SimpleResponse response = null;
 
-            Transport.SimpleResponse response = transport.call(serviceName, rpc.name(), message);
+            try {
+                response = transport.call(serviceName, rpc.name(), message);
+            } catch (RpcCallWriteFailedException e) {
+                // TODO: 写失败重试
+                return null;
+            } catch (RpcCallTimeoutException e) {
+                // TODO: 超时重试
+                return null;
+            } catch (RpcConnectionClosedException e) {
+                // TODO: 连接关闭重试
+                return null;
+            }
+
             Class<?> retType = method.getReturnType();
             if(retType == void.class || retType == Void.class) {
                 return null;                // 没有返回值

@@ -1,5 +1,8 @@
 package com.rpcclient.rpc.exception;
 
+import lombok.Getter;
+
+@Getter
 public class RpcException extends RuntimeException {
     private final int errorCode;
     private final long requestId;
@@ -20,13 +23,5 @@ public class RpcException extends RuntimeException {
         super(message, cause);
         this.errorCode = errorCode;
         this.requestId = requestId;
-    }
-
-    public int getErrorCode() {
-        return errorCode;
-    }
-
-    public long getRequestId() {
-        return requestId;
     }
 }
