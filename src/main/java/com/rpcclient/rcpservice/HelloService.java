@@ -1,4 +1,4 @@
-package com.rpcclient.service;
+package com.rpcclient.rcpservice;
 
 
 import com.rpcclient.protoc.hello.HelloWorldRequest;

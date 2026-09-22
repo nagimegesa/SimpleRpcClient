@@ -2,7 +2,7 @@ package com.rpcclient;
 
 import com.rpcclient.protoc.hello.HelloWorldRequest;
 import com.rpcclient.rpc.RpcClient;
-import com.rpcclient.service.HelloService;
+import com.rpcclient.rcpservice.HelloService;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;

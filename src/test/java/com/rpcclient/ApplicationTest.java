@@ -3,7 +3,7 @@ package com.rpcclient;
 import com.rpcclient.protoc.hello.HelloWorldRequest;
 import com.rpcclient.protoc.hello.HelloWorldResponse;
 import com.rpcclient.rpc.RpcClient;
-import com.rpcclient.service.HelloService;
+import com.rpcclient.rcpservice.HelloService;
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

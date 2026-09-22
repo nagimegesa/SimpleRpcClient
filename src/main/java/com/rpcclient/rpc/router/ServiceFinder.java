@@ -5,8 +5,10 @@ import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.naming.NamingService;
 import com.alibaba.nacos.api.naming.pojo.Instance;
 import com.alibaba.nacos.api.naming.pojo.ListView;
+import com.rpcclient.rpc.RpcConfig;
 import com.rpcclient.rpc.ServiceAddress;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import com.rpcclient.rpc.exception.RpcException;
@@ -18,21 +20,17 @@ import java.util.Properties;
 @Component
 public class ServiceFinder {
 
-    @Value("${rpc.service.nacos.address}")
-    private String NACOS_SERVER_ADDRESS;
-    @Value("${rpc.service.nacos.user}")
-    private String USER_NAME;
-    @Value("${rpc.service.nacos.password}")
-    private String PASSWORD;
+    @Resource
+    RpcConfig config;
 
     private NamingService service = null;
 
     @PostConstruct
     void init() {
         Properties props = new Properties();
-        props.put("username", USER_NAME);
-        props.put("password", PASSWORD);
-        props.put("serverAddr", NACOS_SERVER_ADDRESS);
+        props.put("username", config.USER_NAME);
+        props.put("password", config.PASSWORD);
+        props.put("serverAddr", config.NACOS_SERVER_ADDRESS);
 
         try {
             service = NacosFactory.createNamingService(props);

@@ -7,11 +7,12 @@
 ## 特性
 
 - **注解式服务代理**：接口标注 `@RpcService`，方法标注 `@RpcMethod`，即可获得可调用的远程服务代理。方法调用、请求编码、响应关联、结果反序列化由框架完成，新增服务只需一个接口文件。
-- **Spring Boot 集成**：`RpcClient` 与 `ServiceFinder` 是容器内的 Bean，调用方通过 `@Resource` / `@Autowired` 注入即可使用；Nacos 地址、账号密码等配置由 `application.properties` 提供并被 `@Value` 注入。
-- **Nacos 服务发现**：通过 Nacos 获取服务实例并按权重选择健康实例，支持多实例部署下的负载均衡，同时开放全量实例查询接口以便自定义选路策略。
+- **Spring Boot 集成**：`RpcClient`、`ServiceRouter` 与 `ServiceFinder` 都是容器内的 Bean，调用方通过 `@Resource` / `@Autowired` 注入即可使用；Nacos 地址、超时、重试等配置由 `application.properties` 提供并被 `@Value` 注入。
+- **Nacos 服务发现与路由**：`ServiceRouter` 负责选路与连接缓存，按健康实例建立连接，并通过**建连失败黑名单（带 TTL）**跳过刚失效的实例，应对 Nacos 只保证最终一致的问题。
 - **自定义二进制协议**：与 C++ 服务端共用同一套协议，定长包头加变长字段，Protobuf 负责序列化，支持粘包与分包处理。
-- **单连接并发请求**：基于 Netty 异步传输，同一服务地址复用一条 TCP 连接，通过请求 ID 关联并发请求与响应，连接断开时在途请求立即失败。
-- **错误码透传**：服务端错误以 `RpcException` 抛出，携带错误码与请求 ID，涵盖报文错误、未知函数、参数解析失败等类型。
+- **单连接并发请求**：基于 Netty 异步传输，同一服务地址复用一条 TCP 连接，通过请求 ID 关联并发请求与响应；`pending` 表按连接隔离，某条连接断开只会让该连接上的在途请求失败。
+- **连接失效自愈**：调用前检查连接健康状态，不可用即关闭并从缓存剔除，下一次调用自动重建；连接断开时回调清理缓存。
+- **分层异常与重试**：失败按类型区分（建连失败、写失败、调用超时、连接断开），连接类失败自动换连接重试，服务端错误码原样透传。
 
 ---
 
@@ -36,15 +37,25 @@
 rpc.service.nacos.address=127.0.0.1:8848
 rpc.service.nacos.user=nacos
 rpc.service.nacos.password=nacos
+
+# 调用与路由
+rpc.service.timeout=3000
+rpc.service.call.retry=3
+rpc.service.router.retry=3
+rpc.service.router.blacklist-ttl=30000
 ```
 
-| 配置项 | 说明 |
-| --- | --- |
-| `rpc.service.nacos.address` | Nacos 服务端地址，格式为 `host:port` |
-| `rpc.service.nacos.user` | Nacos 用户名 |
-| `rpc.service.nacos.password` | Nacos 密码 |
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `rpc.service.nacos.address` | — | Nacos 服务端地址，格式为 `host:port` |
+| `rpc.service.nacos.user` | — | Nacos 用户名 |
+| `rpc.service.nacos.password` | — | Nacos 密码 |
+| `rpc.service.timeout` | 3000 | 单次调用的读响应超时，单位毫秒 |
+| `rpc.service.call.retry` | 3 | 单次请求的重试次数（连接类失败时换连接重试） |
+| `rpc.service.router.retry` | 3 | 路由层寻找可用连接的最大尝试次数 |
+| `rpc.service.router.blacklist-ttl` | 30000 | 建连失败的实例被拉黑的时长，单位毫秒 |
 
-三项均为必填，`ServiceFinder` 在 `@PostConstruct` 阶段据此创建 Nacos 命名服务，缺失或错误会导致容器启动失败。
+前三项均为必填，`ServiceFinder` 在 `@PostConstruct` 阶段据此创建 Nacos 命名服务，缺失或错误会导致容器启动失败。
 
 ---
 
@@ -99,7 +110,7 @@ mvn spring-boot:run
 服务名与方法名必须与服务端注册时使用的字符串完全一致：
 
 ```java
-package com.rpcclient.service;
+package com.rpcclient.rcpservice;
 
 import com.rpcclient.protoc.hello.HelloWorldRequest;
 import com.rpcclient.protoc.hello.HelloWorldResponse;
@@ -123,7 +134,7 @@ public interface HelloService {
 import com.rpcclient.protoc.hello.HelloWorldRequest;
 import com.rpcclient.protoc.hello.HelloWorldResponse;
 import com.rpcclient.rpc.RpcClient;
-import com.rpcclient.service.HelloService;
+import com.rpcclient.rcpservice.HelloService;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Component;
 
@@ -142,7 +153,21 @@ public class HelloCaller {
 }
 ```
 
-`newService` 返回动态代理对象，调用失败时抛出携带错误码与请求 ID 的 `RpcException`。服务地址由 `ServiceFinder` 从 Nacos 选取健康实例，同一地址复用同一条 Netty 连接。
+`newService` 返回动态代理对象，调用失败时抛出携带错误码与请求 ID 的 `RpcException`。服务地址由 `ServiceRouter` 从 Nacos 选取健康实例，同一地址复用同一条 Netty 连接。
+
+### 错误处理
+
+失败按类型区分，`RpcException` 的子类对应不同阶段：
+
+| 异常 | 含义 | 是否重试 |
+| --- | --- | --- |
+| `RpcConnectionTimeoutException` | 建连失败或超时 | 换实例重试 |
+| `RpcCallWriteFailedException` | 请求写入失败（确定未送达） | 重试 |
+| `RpcCallTimeoutException` | 等待响应超时（结果未知） | 重试 |
+| `RpcConnectionClosedException` | 连接已断开 | 换连接重试 |
+| `RpcException`（带服务端 `errorCode`） | 服务端业务错误 | 不重试 |
+
+重试次数由 `rpc.service.call.retry` 控制。**注意 `RpcCallTimeoutException` 的语义是「结果未知」**——服务端可能已经执行，只是响应没回来，对非幂等接口需谨慎依赖重试。
 
 ### 跳过服务发现直连
 
@@ -156,7 +181,8 @@ import com.rpcclient.rpc.transport.Transport;
 Transport transport = new RpcTransport();
 transport.connect("127.0.0.1", (short) 8891);
 
-HelloService service = RpcClient.newService(HelloService.class, transport);
+// 第三个参数为请求重试次数
+HelloService service = RpcClient.newService(HelloService.class, transport, 3);
 ```
 
 该方式不依赖 Nacos 配置，可脱离 Spring 容器单独使用。
@@ -171,16 +197,18 @@ src/main/java/com/rpcclient/
   protoc/hello/                 hello.proto 生成的 Protobuf 类
   service/HelloService.java     示例服务接口
   rpc/
-      RpcClient.java            Spring Bean，动态代理与连接缓存
-      ServiceFinder.java        Spring Bean，Nacos 服务发现
+      RpcClient.java            Spring Bean，动态代理与请求重试
       ServiceAddress.java       服务地址
+      router/
+          ServiceRouter.java    Spring Bean，选路、连接缓存与黑名单
+          ServiceFinder.java    Spring Bean，Nacos 服务发现
       annotation/               @RpcService 与 @RpcMethod
-      exception/                RpcException 与 RpcErrorCode
+      exception/                RpcException 及分类子类、RpcErrorCode
       handler/                  解码器、编码器与响应处理器
       message/                  请求与响应模型，以及协议编码器
       transport/                传输层接口与 Netty 实现
 src/main/resources/
-  application.properties        Nacos 地址与账号配置
+  application.properties        Nacos 地址、超时与重试配置
 src/test/java/com/rpcclient/
   ApplicationTest.java          @SpringBootTest 压测
 ```

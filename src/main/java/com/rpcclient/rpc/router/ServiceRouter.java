@@ -1,12 +1,12 @@
 package com.rpcclient.rpc.router;
 
+import com.rpcclient.rpc.RpcConfig;
 import com.rpcclient.rpc.ServiceAddress;
 import com.rpcclient.rpc.exception.RpcConnectionTimeoutException;
 import com.rpcclient.rpc.transport.RpcTransport;
 import com.rpcclient.rpc.transport.Transport;
 import jakarta.annotation.Resource;
 import org.jspecify.annotations.Nullable;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,14 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class ServiceRouter {
 
-    @Value("${rpc.service.timeout:3000}")
-    private int transportWriteTimeout;
-
-    @Value("${rpc.service.router.retry:3}")
-    private int retry;
-
-    @Value("${rpc.service.router.blacklist-ttl:30000}")
-    private long blacklistTtlMs;
+    @Resource
+    RpcConfig config;
 
     private final ConcurrentHashMap<ServiceAddress, Transport> serviceTransport = new ConcurrentHashMap<>();
     // 黑名单
@@ -31,7 +25,7 @@ public class ServiceRouter {
     ServiceFinder finder;
 
     public Transport getTransport(String service) {
-        for(int i = 0; i < retry; ++i) {
+        for(int i = 0; i < config.rpcRouterRetry; ++i) {
             ServiceAddress serviceAddress = finder.selectService(service);
             Transport transport = serviceTransport.get(serviceAddress);
             if(transport != null) { // 缓存命中
@@ -62,12 +56,12 @@ public class ServiceRouter {
             }
         }
 
-        throw new RpcConnectionTimeoutException("Can't find a rpc connection after %d counts".formatted(retry));
+        throw new RpcConnectionTimeoutException("Can't find a rpc connection after %d counts".formatted(config.rpcRouterRetry));
     }
 
     private @Nullable Transport getTransport(ServiceAddress serviceAddress) {
         Transport transport = new RpcTransport();
-        transport.setTimeout(transportWriteTimeout);
+        transport.setTimeout(config.rpcCallTimeout);
         transport.addCloseListener(t -> serviceTransport.remove(serviceAddress, transport));
         try {
             transport.connect(serviceAddress.ip, (short) serviceAddress.port);
@@ -90,6 +84,6 @@ public class ServiceRouter {
     }
 
     private void addToBlacklist(ServiceAddress addr) {
-        blacklist.put(addr, System.currentTimeMillis() + blacklistTtlMs);
+        blacklist.put(addr, System.currentTimeMillis() + config.blacklistTtlMs);
     }
 }
