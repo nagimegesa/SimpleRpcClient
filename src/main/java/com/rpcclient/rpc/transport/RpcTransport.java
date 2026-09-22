@@ -24,10 +24,10 @@ public class RpcTransport implements Transport {
 
     private static final AtomicLong requestId = new AtomicLong(1);
     private static final EventLoopGroup group = new NioEventLoopGroup();
-    private static final Bootstrap bootstrap;
-    private static final ConcurrentHashMap<Long, CompletableFuture<Response>> pending = new ConcurrentHashMap<>();
+    private final Bootstrap bootstrap;
+    private final ConcurrentHashMap<Long, CompletableFuture<Response>> pending = new ConcurrentHashMap<>();
 
-    static {
+    public RpcTransport() {
         bootstrap = new Bootstrap();
         bootstrap.group(group)
                 .channel(NioSocketChannel.class)          // 客户端用 NioSocketChannel
@@ -67,14 +67,14 @@ public class RpcTransport implements Transport {
         if (channelFuture != null) {
             log.info("close transport");
             if(closeCallback != null) {
-                closeCallback.OnClose(this);
+                closeCallback.onClose(this);
             }
             channelFuture.channel().close();
         }
     }
 
-    public boolean isActivate() {
-        return channelFuture.channel().isActive();
+    public boolean isActive() {
+        return channelFuture != null && channelFuture.channel() != null && channelFuture.channel().isActive();
     }
 
     public void addCloseListener(CloseCallback callback) {
@@ -83,7 +83,7 @@ public class RpcTransport implements Transport {
 
     public SimpleResponse call(String serviceName, String functionName, GeneratedMessageV3 message) {
 
-        if(!isActivate()) {
+        if(!this.isActive()) {
             close();
             throw new RpcConnectionClosedException("Rpc connection has been closed");
         }
@@ -113,7 +113,7 @@ public class RpcTransport implements Transport {
                 }
             });
 
-            Response response = future.get(timeout, TimeUnit.MICROSECONDS);
+            Response response = future.get(timeout, TimeUnit.MILLISECONDS);
 
             // ResponseHandler 正常只会在 type == 2 时 complete
             // 这里只是防御性判断
@@ -138,7 +138,7 @@ public class RpcTransport implements Transport {
             );
         } catch (TimeoutException e) {
             throw new RpcCallTimeoutException(
-                    "com.rpcclient.rpc call timeout, requestId=" + id + ", function=" + functionName
+                    "com.rpcclient.rpc call timeout, requestId=" + id + ", function=" + functionName, e
             );
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();

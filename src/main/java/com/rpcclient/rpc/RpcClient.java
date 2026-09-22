@@ -3,54 +3,28 @@ package com.rpcclient.rpc;
 import com.google.protobuf.GeneratedMessageV3;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.rpcclient.rpc.exception.*;
+import com.rpcclient.rpc.router.ServiceRouter;
+import jakarta.annotation.Resource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import com.rpcclient.rpc.annotation.RpcMethod;
 import com.rpcclient.rpc.annotation.RpcService;
-import com.rpcclient.rpc.transport.RpcTransport;
 import com.rpcclient.rpc.transport.Transport;
 
-import javax.annotation.Resource;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 @Component
 public class RpcClient {
 
     @Resource
-    public ServiceFinder finder;
+    private ServiceRouter router;
 
-    @Value("${rpc.service.timeout:3000}")
-    private int transportWriteTimeout;
-
-    @Value("${rpc.service.retry:3}")
-    private int retry;
-
-    private static final ConcurrentHashMap<ServiceAddress, Transport> serviceTransport = new ConcurrentHashMap<>();
-
-    private Transport getTransport(String service) {
-        for(int i = 0; i < retry; ++i) {
-            ServiceAddress serviceAddress = finder.selectService(service);
-            if(serviceTransport.containsKey(serviceAddress)) {
-                return serviceTransport.get(serviceAddress);
-            }
-            Transport transport = new RpcTransport();
-            transport.setTimeout(transportWriteTimeout);
-            transport.addCloseListener(t -> serviceTransport.remove(serviceAddress, transport));
-            try {
-                transport.connect(serviceAddress.ip, (short) serviceAddress.port);
-            } catch (RpcConnectionTimeoutException ignored) {
-                continue;
-            }
-            serviceTransport.put(serviceAddress, transport);
-            return transport;
-        }
-
-        throw new RpcConnectionTimeoutException("The RPC connection still timed out after %d attempts.".formatted(retry));
-    }
+    @Value("${rpc.service.call.retry:3}")
+    private int rpcCallRetry;
 
     @SuppressWarnings("unchecked")
     public <T> T newService(Class<T> metaClass) {
@@ -59,31 +33,49 @@ public class RpcClient {
         if( annotation == null ) {
             throw new RpcException("Rpc Service class must has a annotation Rpc Service");
         }
-        Transport transport = getTransport(annotation.name());
-        return (T) Proxy.newProxyInstance(metaClass.getClassLoader(), new Class[]{metaClass}, new RpcCaller(annotation.name(), transport));
+
+        Supplier<Transport> getTransport = () -> router.getTransport(annotation.name());
+        return (T) Proxy.newProxyInstance(metaClass.getClassLoader(), new Class[]{metaClass}, new RpcCaller(annotation.name(), getTransport, rpcCallRetry));
     }
 
     @SuppressWarnings("unchecked")
-    public static <T> T newService(Class<T> metaClass, Transport transport) {
+    public static <T> T newService(Class<T> metaClass, Transport transport, int rpcCallRetry) {
 
         RpcService annotation = metaClass.getAnnotation(RpcService.class);
         if( annotation == null ) {
             throw new RpcException("Rpc Service class must has a annotation Rpc Service");
         }
-        return (T) Proxy.newProxyInstance(metaClass.getClassLoader(), new Class[]{metaClass}, new RpcCaller(annotation.name(), transport));
+        return (T) Proxy.newProxyInstance(metaClass.getClassLoader(), new Class[]{metaClass}, new RpcCaller(annotation.name(), transport, rpcCallRetry));
     }
 
     public static class RpcCaller implements InvocationHandler {
 
-        private final Transport transport;
+        private Transport transport;
         private final String serviceName;
-        public RpcCaller(String serviceName, Transport transport) {
+        private final int retry;
+        private final Supplier<Transport> getTransport;
+
+        public RpcCaller(String serviceName, Supplier<Transport> getTransport, int retry) {
+            this.serviceName = serviceName;
+            this.retry = retry;
+            this.getTransport = getTransport;
+            this.transport = getTransport.get();
+        }
+
+        public RpcCaller(String serviceName, Transport transport, int retry) {
             this.serviceName = serviceName;
             this.transport = transport;
+            this.retry = retry;
+            this.getTransport = null;
         }
 
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+
+            if(method.getDeclaringClass() == Class.class) { // 继承class类的方法放行
+                return method.invoke(proxy, args);
+            }
+
             RpcMethod rpc = method.getAnnotation(RpcMethod.class);
             if(rpc == null) {
                 throw new RpcException("Rpc method must has RpcMethod Annotation");
@@ -99,23 +91,32 @@ public class RpcClient {
             }
             Transport.SimpleResponse response = null;
 
-            try {
-                response = transport.call(serviceName, rpc.name(), message);
-            } catch (RpcCallWriteFailedException e) {
-                // TODO: 写失败重试
-                return null;
-            } catch (RpcCallTimeoutException e) {
-                // TODO: 超时重试
-                return null;
-            } catch (RpcConnectionClosedException e) {
-                // TODO: 连接关闭重试
-                return null;
+            RuntimeException lastException = null;
+            for(int i = 0; i < retry; ++i) {
+                try {
+                    response = transport.call(serviceName, rpc.name(), message);
+                    break;
+                } catch (RpcCallWriteFailedException | RpcCallTimeoutException e) {
+                    lastException = e; // 注意这里假设 call timeout 可以重试
+                } catch (RpcConnectionClosedException e) {
+                    lastException = e;
+                    if(getTransport != null) { // 连接关闭尝试换一个 transport, router会处理好黑名单
+                        transport = getTransport.get();
+                    }
+                }
+            }
+
+            if(response == null && lastException != null) { // 多次尝试出错
+                throw lastException;
             }
 
             Class<?> retType = method.getReturnType();
             if(retType == void.class || retType == Void.class) {
                 return null;                // 没有返回值
             }
+
+            // 到这里 response 应该不可能为 null, 如果有那就是序列化错误，没法处理
+            assert response != null;
 
             try {
                 Method parse = retType.getMethod("parseFrom", byte[].class);

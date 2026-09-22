@@ -1,5 +1,6 @@
 package com.rpcclient.rpc.handler;
 
+import com.rpcclient.rpc.exception.RpcConnectionClosedException;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import com.rpcclient.rpc.exception.RpcErrorCode;
@@ -39,7 +40,7 @@ public class ResponseHandler extends SimpleChannelInboundHandler<Response> {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        RpcException e = new RpcException("connection closed");
+        RpcException e = new RpcConnectionClosedException("connection closed");
         pending.forEach((id, f) -> f.completeExceptionally(e));
         ctx.fireChannelInactive();
     }

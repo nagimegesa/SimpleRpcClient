@@ -6,7 +6,7 @@ import java.io.Closeable;
 
 public interface Transport extends Closeable {
     public interface CloseCallback {
-        public void OnClose(Transport transport);
+        public void onClose(Transport transport);
     }
 
     public class SimpleResponse {
@@ -18,6 +18,7 @@ public interface Transport extends Closeable {
     public void connect(String ip, short port);
     public void close();
     public void addCloseListener(CloseCallback callback);
+    public boolean isActive();
     public SimpleResponse call(String serviceName, String functionName, GeneratedMessageV3 message);
 
 }
