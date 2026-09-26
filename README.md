@@ -2,17 +2,43 @@
 
 基于 Spring Boot 3 与 Netty 的 RPC 客户端，用于调用 [SimpleRedisClient](https://github.com/nagimegesa/SimpleRedisClient) 中 C++ 实现的 RPC 服务端。
 
+## 目录
+
+- [特性](#特性)
+- [环境要求](#环境要求)
+- [配置](#配置)
+- [快速开始](#快速开始)
+  - [编译](#编译)
+  - [启动依赖](#启动依赖)
+  - [运行](#运行)
+- [用法](#用法)
+  - [定义服务接口](#定义服务接口)
+  - [通过 Spring 注入并发起调用](#通过-spring-注入并发起调用)
+  - [错误处理](#错误处理)
+  - [拦截器链](#拦截器链)
+  - [监控](#监控)
+  - [跳过服务发现直连](#跳过服务发现直连)
+- [目录结构](#目录结构)
+- [压测结果](#压测结果)
+- [协议附录](#协议附录)
+  - [请求](#请求)
+  - [响应](#响应)
+  - [错误码](#错误码)
+
 ---
 
 ## 特性
 
 - **注解式服务代理**：接口标注 `@RpcService`，方法标注 `@RpcMethod`，即可获得可调用的远程服务代理。方法调用、请求编码、响应关联、结果反序列化由框架完成，新增服务只需一个接口文件。
-- **Spring Boot 集成**：`RpcClient`、`ServiceRouter` 与 `ServiceFinder` 都是容器内的 Bean，调用方通过 `@Resource` / `@Autowired` 注入即可使用；Nacos 地址、超时、重试等配置由 `application.properties` 提供并被 `@Value` 注入。
-- **Nacos 服务发现与路由**：`ServiceRouter` 负责选路与连接缓存，按健康实例建立连接，并通过**建连失败黑名单（带 TTL）**跳过刚失效的实例，应对 Nacos 只保证最终一致的问题。
+- **Spring Boot 集成**：`RpcClient`、`ServiceRouter` 与 `ServiceFinder` 都是容器内的 Bean，调用方通过 `@Resource` / `@Autowired` 注入即可使用；配置由 `application.properties` 提供，`RpcConfig` 统一读取。
+- **Nacos 服务发现与路由**：`ServiceRouter` 负责选路与连接缓存，按健康实例建立连接，并通过带 TTL 的黑名单跳过建连失败的实例。
 - **自定义二进制协议**：与 C++ 服务端共用同一套协议，定长包头加变长字段，Protobuf 负责序列化，支持粘包与分包处理。
-- **单连接并发请求**：基于 Netty 异步传输，同一服务地址复用一条 TCP 连接，通过请求 ID 关联并发请求与响应；`pending` 表按连接隔离，某条连接断开只会让该连接上的在途请求失败。
-- **连接失效自愈**：调用前检查连接健康状态，不可用即关闭并从缓存剔除，下一次调用自动重建；连接断开时回调清理缓存。
-- **分层异常与重试**：失败按类型区分（建连失败、写失败、调用超时、连接断开），连接类失败自动换连接重试，服务端错误码原样透传。
+- **单连接并发请求**：基于 Netty 异步传输，同一服务地址复用一条 TCP 连接，通过请求 ID 关联并发请求与响应。
+- **连接失效自愈**：调用前检查连接健康状态，不可用即关闭并从缓存剔除，下一次调用自动重建。
+- **分层异常与重试**：失败按类型区分（建连失败、写失败、调用超时、连接断开、限流拒绝），由拦截器按类型处理，服务端错误码原样透传。
+- **拦截器链**：埋点、重试、限流实现为 `RpcInterceptor`，按 `Ordered` 排序串成链，扩展横切能力不需要改动调用主流程。
+- **Micrometer 指标**：调用次数、耗时直方图、各类重试次数分布，通过 `/actuator/metrics` 或 `/actuator/prometheus` 读取。
+- **Sentinel 限流**：调用出口按 QPS 限流，超出阈值的请求抛出 `RpcTooManyCallException`。
 
 ---
 
@@ -38,11 +64,21 @@ rpc.service.nacos.address=127.0.0.1:8848
 rpc.service.nacos.user=nacos
 rpc.service.nacos.password=nacos
 
-# 调用与路由
-rpc.service.timeout=3000
+# 调用
+rpc.service.call-timeout-ms=3000
 rpc.service.call.retry=3
+rpc.service.call-max=100000
+
+# 路由
 rpc.service.router.retry=3
-rpc.service.router.blacklist-ttl=30000
+rpc.service.router.blacklist-ttl-ms=30000
+
+# 监控端点
+management.endpoints.web.exposure.include=health,metrics,prometheus
+management.endpoint.prometheus.enabled=true
+management.metrics.tags.application=rpc-client
+server.port=8892
+server.address=localhost
 ```
 
 | 配置项 | 默认值 | 说明 |
@@ -50,12 +86,15 @@ rpc.service.router.blacklist-ttl=30000
 | `rpc.service.nacos.address` | — | Nacos 服务端地址，格式为 `host:port` |
 | `rpc.service.nacos.user` | — | Nacos 用户名 |
 | `rpc.service.nacos.password` | — | Nacos 密码 |
-| `rpc.service.timeout` | 3000 | 单次调用的读响应超时，单位毫秒 |
-| `rpc.service.call.retry` | 3 | 单次请求的重试次数（连接类失败时换连接重试） |
+| `rpc.service.call-timeout-ms` | 3000 | 单次调用的读响应超时，单位毫秒 |
+| `rpc.service.call.retry` | 3 | 调用层重试次数，作用于写入失败与调用超时 |
 | `rpc.service.router.retry` | 3 | 路由层寻找可用连接的最大尝试次数 |
-| `rpc.service.router.blacklist-ttl` | 30000 | 建连失败的实例被拉黑的时长，单位毫秒 |
+| `rpc.service.router.blacklist-ttl-ms` | 30000 | 建连失败的实例被拉黑的时长，单位毫秒 |
+| `rpc.service.call-max` | 100000 | Sentinel QPS 限流阈值 |
+| `server.port` | 8892 | 监控端点端口 |
+| `server.address` | localhost | 监控端点绑定地址 |
 
-前三项均为必填，`ServiceFinder` 在 `@PostConstruct` 阶段据此创建 Nacos 命名服务，缺失或错误会导致容器启动失败。
+Nacos 三项配置为必填，`ServiceFinder` 在 `@PostConstruct` 阶段据此创建 Nacos 命名服务。
 
 ---
 
@@ -69,11 +108,11 @@ mvn clean package
 
 `spring-boot-maven-plugin` 会打成可执行 jar，产物为 `target/RpcClient-1.0-SNAPSHOT.jar`。
 
-> 单元测试 `ApplicationTest` 是需要真实 Nacos 与 RPC 服务端参与的压测，打包时可跳过：
->
-> ```bash
-> mvn clean package -DskipTests
-> ```
+`ApplicationTest` 是需要真实 Nacos 与 RPC 服务端参与的压测，打包时可跳过：
+
+```bash
+mvn clean package -DskipTests
+```
 
 ### 启动依赖
 
@@ -157,17 +196,63 @@ public class HelloCaller {
 
 ### 错误处理
 
-失败按类型区分，`RpcException` 的子类对应不同阶段：
+失败按类型区分，`RpcException` 的子类对应不同的失败阶段：
 
-| 异常 | 含义 | 是否重试 |
+| 异常 | 含义 | 拦截器处理 |
 | --- | --- | --- |
-| `RpcConnectionTimeoutException` | 建连失败或超时 | 换实例重试 |
-| `RpcCallWriteFailedException` | 请求写入失败（确定未送达） | 重试 |
-| `RpcCallTimeoutException` | 等待响应超时（结果未知） | 重试 |
-| `RpcConnectionClosedException` | 连接已断开 | 换连接重试 |
-| `RpcException`（带服务端 `errorCode`） | 服务端业务错误 | 不重试 |
+| `RpcConnectionTimeoutException` | 建连失败或超时 | 换实例重试（`ConnectionRetryInterceptor`） |
+| `RpcConnectionClosedException` | 连接已断开 | 换连接重试（`ConnectionRetryInterceptor`） |
+| `RpcCallWriteFailedException` | 请求写入失败，确定未送达 | 重试（`CallerRetryInterceptor`） |
+| `RpcCallTimeoutException` | 等待响应超时，结果未知 | 重试（`CallerRetryInterceptor`） |
+| `RpcTooManyCallException` | 被 Sentinel 限流拒绝 | 直接抛出，不重试 |
+| `RpcException`（带服务端 `errorCode`） | 服务端业务错误 | 直接抛出，不重试 |
 
-重试次数由 `rpc.service.call.retry` 控制。**注意 `RpcCallTimeoutException` 的语义是「结果未知」**——服务端可能已经执行，只是响应没回来，对非幂等接口需谨慎依赖重试。
+### 拦截器链
+
+埋点、重试、限流以拦截器形式挂在 `RpcCaller` 上，按 `getOrder()` 从小到大由外向内包裹，链尾执行实际的 `transport.call()`：
+
+| 顺序 | 拦截器 | 职责 |
+| --- | --- | --- |
+| `Integer.MIN_VALUE` | `MetricInterceptor` | 统计整次调用（含重试）的耗时与结果 |
+| 0 | `ConnectionRetryInterceptor` | 获取连接，连接失效时换连接重试 |
+| 1 | `CallerRetryInterceptor` | 写入失败与调用超时重试 |
+| 2 | `CallerLimitInterceptor` | Sentinel QPS 限流 |
+| — | `RpcInterceptorTerminal` | 执行 `transport.call()` |
+
+新增拦截器只需实现 `RpcInterceptor` 并注册为 Spring Bean，`RpcClient` 会自动收集并按顺序串链。
+
+### 监控
+
+项目引入 `spring-boot-starter-web`，监控端点监听 `server.port`（默认 8892）：
+
+```bash
+# 查看所有指标名
+curl http://localhost:8892/actuator/metrics
+
+# 调用次数（tag: service / method / result）
+curl http://localhost:8892/actuator/metrics/rpc.call.count
+
+# 调用耗时（tag: service / method）
+curl http://localhost:8892/actuator/metrics/rpc.call.duration
+
+# 重试事件总数与每次调用的重试次数分布（tag: reason）
+curl http://localhost:8892/actuator/metrics/rpc.call.retry.events
+curl http://localhost:8892/actuator/metrics/rpc.call.retry.per_call
+
+# Prometheus 抓取端点
+curl http://localhost:8892/actuator/prometheus
+```
+
+| 指标 | 类型 | 标签 | 说明 |
+| --- | --- | --- | --- |
+| `rpc.call.count` | Counter | `service`、`method`、`result` | 调用次数，`result` 为 `success` / `failure` |
+| `rpc.call.duration` | Timer | `service`、`method` | 整次调用耗时（含重试），已开启百分位直方图 |
+| `rpc.call.retry.events` | Counter | `reason` | 各类重试事件总数 |
+| `rpc.call.retry.per_call` | DistributionSummary | `reason` | 每次调用内的重试次数分布 |
+
+`reason` 取值：`connection_closed`、`connection_timeout`、`call_retry`、`call_timeout`。
+
+`src/main/resources/prometheus.yml` 提供了对应的 Prometheus 抓取配置示例。
 
 ### 跳过服务发现直连
 
@@ -195,20 +280,33 @@ HelloService service = RpcClient.newService(HelloService.class, transport, 3);
 src/main/java/com/rpcclient/
   App.java                      Spring Boot 启动类
   protoc/hello/                 hello.proto 生成的 Protobuf 类
-  service/HelloService.java     示例服务接口
+  rcpservice/HelloService.java  示例服务接口
   rpc/
-      RpcClient.java            Spring Bean，动态代理与请求重试
+      RpcClient.java            Spring Bean，创建动态代理
+      RpcCaller.java            代理调用入口：组装 context、串拦截器链
+      RpcCallerDirect.java      脱离 Spring 时的直连调用实现
+      RpcConfig.java            统一读取所有 rpc.* 配置
+      RpcContext.java           单次调用的上下文（服务名、方法名、重试计数）
       ServiceAddress.java       服务地址
       router/
           ServiceRouter.java    Spring Bean，选路、连接缓存与黑名单
           ServiceFinder.java    Spring Bean，Nacos 服务发现
+      interceptor/
+          RpcInterceptor.java         拦截器接口
+          RpcInterceptorChain.java    拦截器链
+          RpcInterceptorTerminal.java 链尾的实际调用
+          MetricInterceptor.java      指标埋点
+          ConnectionRetryInterceptor.java  连接类重试
+          CallerRetryInterceptor.java      调用类重试
+          CallerLimitInterceptor.java      Sentinel QPS 限流
       annotation/               @RpcService 与 @RpcMethod
       exception/                RpcException 及分类子类、RpcErrorCode
       handler/                  解码器、编码器与响应处理器
       message/                  请求与响应模型，以及协议编码器
       transport/                传输层接口与 Netty 实现
 src/main/resources/
-  application.properties        Nacos 地址、超时与重试配置
+  application.properties        Nacos 地址、超时重试、限流与监控端点配置
+  prometheus.yml                Prometheus 抓取配置示例
 src/test/java/com/rpcclient/
   ApplicationTest.java          @SpringBootTest 压测
 ```
@@ -217,10 +315,11 @@ src/test/java/com/rpcclient/
 
 ## 压测结果
 
-压测由 `ApplicationTest` 提供，同样基于 Spring 上下文获取 `RpcClient`，并发线程数、压测秒数、预热秒数在 `loadTest()` 中调整：
+压测由 `ApplicationTest` 提供，基于 Spring 上下文获取 `RpcClient`，并发线程数、压测秒数、预热秒数在 `loadTest()` 中调整：
 
 ```java
 @SpringBootTest
+@AutoConfigureObservability
 public class ApplicationTest {
     @Resource
     RpcClient rpcClient;
@@ -253,9 +352,11 @@ mvn test -Dtest=ApplicationTest
 | 平均延迟 | 0.364 ms |
 | p50 / p90 | 0.332 ms / 0.547 ms |
 | p99 / p99.9 | 0.861 ms / 1.809 ms |
+
 ---
 
 ## 协议附录
+
 ### 请求
 
 | 偏移 | 长度 | 字段 | 说明 |

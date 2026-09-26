@@ -15,7 +15,7 @@ public class RpcInterceptorChain {
     }
 
     public Object process(RpcContext context) {
-        if(index == interceptors.size() - 1) {
+        if(index == interceptors.size()) {
             return handler.invoke();
         }
         RpcInterceptor rpcInterceptor = interceptors.get(index);

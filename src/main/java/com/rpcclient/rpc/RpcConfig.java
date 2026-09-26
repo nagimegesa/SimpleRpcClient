@@ -20,7 +20,7 @@ public class RpcConfig {
     @Value("${rpc.service.call-timeout-ms:3000}")
     public int rpcCallTimeout;
 
-    @Value("${rpc.service.router.retry:3}")
+    @Value("${rpc.service.call.retry:3}")
     public int rpcRouterRetry;
 
     @Value("${rpc.service.router.blacklist-ttl-ms:30000}")
