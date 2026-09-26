@@ -6,12 +6,14 @@ import com.rpcclient.rpc.RpcClient;
 import com.rpcclient.rcpservice.HelloService;
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.*;
 import java.util.concurrent.*;
 
 @SpringBootTest
+@AutoConfigureObservability
 public class ApplicationTest {
 
     @Resource

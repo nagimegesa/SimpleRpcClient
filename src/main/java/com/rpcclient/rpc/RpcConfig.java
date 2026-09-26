@@ -25,4 +25,13 @@ public class RpcConfig {
 
     @Value("${rpc.service.router.blacklist-ttl-ms:30000}")
     public long blacklistTtlMs;
+
+    @Value("${rpc.service.call-max:100000}")
+    public long callMax;
+
+    @Value("${rpc.service.call-limit-sleep-start-ms:0.1}")
+    public double limitSleepStart;
+
+    @Value("${rpc.service.call-limit-sleep-max-ms:5}")
+    public double limitSleepMax;
 }

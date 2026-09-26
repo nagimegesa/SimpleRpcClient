@@ -21,6 +21,7 @@ public class RpcContext {
     int connectionTimeoutRetryCount = 0;
     int callRetryCount = 0;
     int callTimeoutCount = 0;
+    int tooManyCallCount = 0;
     Supplier<Transport> transportGetter;
 
     public Transport getNewTransport() {

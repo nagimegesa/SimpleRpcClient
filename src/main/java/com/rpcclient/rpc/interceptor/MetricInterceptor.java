@@ -5,11 +5,13 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Component
 public class MetricInterceptor implements RpcInterceptor {
 
@@ -26,6 +28,8 @@ public class MetricInterceptor implements RpcInterceptor {
 
     @Override
     public Object process(RpcContext context, RpcInterceptorChain chain) {
+        log.debug("[MetricInterceptor] invoked, service="
+                + context.getServiceName() + ", method=" + context.getMethodName());
         long start = System.nanoTime();
         String result = "success";
         try {
@@ -76,7 +80,7 @@ public class MetricInterceptor implements RpcInterceptor {
                 DistributionSummary.builder("rpc.call.retry.per_call")
                         .description("每次 RPC 调用中发生的重试/超时次数分布")
                         .tag("reason", r)
-                        .serviceLevelObjectives(0, 1, 2, 3, 5, 10)
+                        .serviceLevelObjectives(0.5, 1, 3, 6, 9) // 这里使用 0.5 代替 0
                         .register(meterRegistry)
         );
     }
@@ -102,6 +106,6 @@ public class MetricInterceptor implements RpcInterceptor {
 
     @Override
     public int getOrder() {
-        return 100;
+        return Integer.MIN_VALUE; // 统计指标在最外层
     }
 }
